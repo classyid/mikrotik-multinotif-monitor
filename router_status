@@ -1,0 +1,121 @@
+# Script Notifikasi - Router Monitor dengan DHCP Info
+# Data sistem
+:local idrouter [/system identity get name];
+:local idtime [/system clock get time];
+:local iddate [/system clock get date];
+:local cpuLoad [/system resource get cpu-load];
+:local uptime [/system resource get uptime];
+
+# System Resource Info
+:local boardName [/system resource get board-name];
+:local rosVersion [/system resource get version];
+
+# Memory Info
+:local memTotal [/system resource get total-memory];
+:local memFree [/system resource get free-memory];
+:local memPercent (100 - (($memFree * 100) / $memTotal));
+
+# DHCP Info
+:local totalDhcp [/ip dhcp-server lease print count-only];
+:local activeDhcp [/ip dhcp-server lease print count-only where status="bound"];
+
+# Public IP dari Cloud
+:local publicIP [/ip cloud get public-address];
+
+# Interface Info - WAN Ether5 total traffic
+:local iface "ether5";
+:local ifaceStatus [/interface get [find name=$iface] running];
+:local wanStatus;
+:if ($ifaceStatus = true) do={
+    :set wanStatus "ACTIVE";
+} else={
+    :set wanStatus "DOWN";
+}
+
+# Ambil total traffic dalam MB
+:local rxBytes [/interface get $iface rx-byte];
+:local txBytes [/interface get $iface tx-byte];
+:local rxMB ($rxBytes / 1048576);
+:local txMB ($txBytes / 1048576);
+
+# Test ping sederhana
+:local pingStatus "FAIL";
+:do {
+    :if ([/ping 8.8.8.8 count=1] > 0) do={
+        :set pingStatus "SUCCESS";
+    }
+} on-error={}
+
+# DNS Info - hitung persentase cache
+:local dnsUsed [/ip dns get cache-used];
+:local dnsSize [/ip dns get cache-size];
+:local dnsPercent ($dnsUsed * 100 / $dnsSize);
+
+# Konfigurasi WhatsApp
+:local nohp "<NUMBER>";
+:local apikey "<APIKEY>";
+:local sender "<SENDER>";
+
+# Konfigurasi Telegram
+:local botToken "<TOKEN>";
+:local chatId "<IDCHAT>";
+
+# Email configuration
+:local emailFrom "$idrouter <noreply@ppanet.net>";
+
+# Membuat pesan sederhana yang sudah terbukti bisa terkirim
+:local message "------- ROUTER STATUS -------\n\n";
+:set message ($message . ">> INFO ROUTER:\n");
+:set message ($message . "Nama      : $idrouter\n");
+:set message ($message . "Board     : $boardName\n");
+:set message ($message . "RouterOS  : $rosVersion\n");
+:set message ($message . "Public IP : > $publicIP\n");
+:set message ($message . "CPU Load  : > $cpuLoad%\n");
+:set message ($message . "Memory    : > $memPercent% used\n");
+:set message ($message . "Uptime    : > $uptime\n");
+:set message ($message . "DNS Usage : > $dnsPercent% used\n\n");
+:set message ($message . ">> DHCP STATUS:\n");
+:set message ($message . "Total     : > $totalDhcp devices\n");
+:set message ($message . "Active    : > $activeDhcp devices\n\n");
+:set message ($message . ">> WAN STATUS (ETHER5):\n");
+:set message ($message . "Status    : > $wanStatus\n");
+:set message ($message . "Total Down: > $rxMB MB\n");
+:set message ($message . "Total Up  : > $txMB MB\n\n");
+:set message ($message . ">> WAKTU:\n");
+:set message ($message . "Tanggal   : $iddate\n");
+:set message ($message . "Jam       : $idtime\n\n");
+:set message ($message . "--------------------------------\n");
+:set message ($message . "[ PPANet Router Monitor ]\n");
+:set message ($message . "--------------------------------");
+
+# Encode untuk WhatsApp & Telegram
+:local encoded "";
+:for i from=0 to=([:len $message]-1) do={
+    :local char [:pick $message $i];
+    :if ($char = " ") do={
+        :set encoded ($encoded . "%20");
+    } else={
+    :if ($char = "\n") do={
+        :set encoded ($encoded . "%0A");
+    } else={
+        :set encoded ($encoded . $char);
+    }}
+}
+
+# Kirim ke WhatsApp
+/tool fetch url="https://m-pedia/send-message\?api_key=$apikey&sender=$sender&number=$nohp&message=$encoded" keep-result=no;
+
+# Kirim ke Telegram
+:local telegramURL "https://api.telegram.org/bot$botToken/sendMessage\?chat_id=$chatId&text=$encoded";
+/tool fetch url=$telegramURL keep-result=no;
+
+# Set Email Settings dengan nama router sebagai pengirim
+/tool e-mail set from=$emailFrom;
+
+# Kirim Email
+/tool e-mail send to="kontak@classy.id" \
+    subject="[$idrouter] Router Status Report" \
+    body=$message;
+
+# Log
+:log info "Router status notification sent to WhatsApp, Telegram and Email";
